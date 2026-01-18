@@ -252,6 +252,24 @@
         </svg>
         Send to Arduino
       </button>
+      <button class="clear-btn" onclick="saveMatrixToFile()">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+          <polyline points="17 21 17 13 7 13 7 21"></polyline>
+          <polyline points="7 3 7 8 15 8"></polyline>
+        </svg>
+        Save to File
+      </button>
+      <button class="clear-btn" onclick="loadMatrixFromFile()">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+          <polyline points="10 9 9 9 8 9"></polyline>
+        </svg>
+        Load from File
+      </button>
       <button class="clear-btn" onclick="clearMatrix()">Clear All</button>
     </div>
 
@@ -262,6 +280,8 @@
         <li>• Click and drag across cells to draw your pattern</li>
         <li>• Red cells = 1, White cells = 0</li>
         <li>• Click "Send to Arduino" to transmit the matrix</li>
+        <li>• Click "Save to File" to download as C++ header file</li>
+        <li>• Click "Load from File" to restore a saved pattern</li>
         <li>• Connection stays open - you can send multiple times</li>
         <li>• Matrix size: 15 rows × 50 columns</li>
       </ul>
@@ -441,6 +461,109 @@
           cells[r][c].classList.remove('active');
         }
       }
+    }
+
+    function saveMatrixToFile() {
+      // Generate C++ header file content
+      const header = `// Auto-generated matrix pattern
+// Generated: ${new Date().toLocaleString()}
+// Size: ${ROWS} rows x ${COLS} columns
+
+#ifndef MATRIX_PATTERN_H
+#define MATRIX_PATTERN_H
+
+#include <Arduino.h>
+
+const int PATTERN_ROWS = ${ROWS};
+const int PATTERN_COLS = ${COLS};
+
+// Matrix pattern data
+const bool matrixPattern[${ROWS}][${COLS}] = {
+`;
+
+      // Generate matrix data
+      let matrixData = '';
+      for (let r = 0; r < ROWS; r++) {
+        matrixData += '  {';
+        for (let c = 0; c < COLS; c++) {
+          matrixData += matrix[r][c];
+          if (c < COLS - 1) matrixData += ', ';
+        }
+        matrixData += '}';
+        if (r < ROWS - 1) matrixData += ',';
+        matrixData += '\n';
+      }
+
+      const footer = `};
+
+#endif // MATRIX_PATTERN_H
+`;
+
+      const fullContent = header + matrixData + footer;
+
+      // Create and download file
+      const blob = new Blob([fullContent], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'matrix_pattern.h';
+      a.click();
+      URL.revokeObjectURL(url);
+
+      console.log('Matrix saved as C++ header file');
+    }
+
+    function loadMatrixFromFile() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.h,.txt';
+      
+      input.onchange = (e) => {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        
+        reader.onload = (event) => {
+          const content = event.target.result;
+          
+          // Parse the matrix data from C++ header file
+          const matches = content.match(/{\s*{[\s\S]*?}\s*}/);
+          if (!matches) {
+            alert('Could not parse matrix data from file');
+            return;
+          }
+          
+          const matrixText = matches[0];
+          const rows = matrixText.match(/{[^}]+}/g);
+          
+          if (!rows || rows.length !== ROWS) {
+            alert(`File should contain ${ROWS} rows, found ${rows ? rows.length : 0}`);
+            return;
+          }
+          
+          // Clear current matrix
+          clearMatrix();
+          
+          // Load new matrix
+          for (let r = 0; r < rows.length && r < ROWS; r++) {
+            const values = rows[r].match(/\d+/g);
+            if (values) {
+              for (let c = 0; c < values.length && c < COLS; c++) {
+                const val = parseInt(values[c]);
+                matrix[r][c] = val;
+                if (val === 1) {
+                  cells[r][c].classList.add('active');
+                }
+              }
+            }
+          }
+          
+          alert('Matrix loaded successfully!');
+        };
+        
+        reader.readAsText(file);
+      };
+      
+      input.click();
     }
 
     // Handle page unload - close connection cleanly
