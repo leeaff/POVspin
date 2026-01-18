@@ -2,25 +2,20 @@
 #include "driver/pcnt.h"
 #include <math.h>
 
-// Binary output pins (these go to your external LED decoder circuit)
-#define OUTPUT_BIT0 8   // LSB - Change to your actual output pins
-#define OUTPUT_BIT1 7   // Middle bit
-#define OUTPUT_BIT2 5   // MSB
+#define OUTPUT_BIT0 8  
+#define OUTPUT_BIT1 7   
+#define OUTPUT_BIT2 5 
 
-// Encoder Pins
 #define ENC_A 32
 #define ENC_B 33
 #define CPR 2400
 #define PCNT_UNIT_USED PCNT_UNIT_0
 
-// POV Display Configuration
-#define NUM_LEDS 8  // Your external circuit controls 8 LEDs (3 bits = 8 combinations)
-#define NUM_COLUMNS 360  // Number of angular positions (1 degree resolution)
-#define COLUMN_DURATION_US 500  // Time to display each column in microseconds
+#define NUM_LEDS 8  
+#define NUM_COLUMNS 360 
+#define COLUMN_DURATION_US 500  
 
-// Display matrix: 8 virtual LEDs × NUM_COLUMNS
-// Each value 0-7 represents which LED should be on
-uint8_t displayMatrix[NUM_COLUMNS];
+bool displayMatrix[NUM_LEDS][NUM_COLUMNS];
 
 int16_t lastCount = 0;
 unsigned long lastTime = 0;
@@ -45,15 +40,20 @@ void setupEncoder() {
   pcnt_counter_resume(PCNT_UNIT_USED);
 }
 
-// Output 3-bit value to control which LED is on
-// ledNumber: 0-7 (which of the 8 LEDs to turn on)
+void setDisplayMatrix(bool inputMatrix[NUM_LEDS][NUM_COLUMNS]) {
+  for (int row = 0; row < NUM_LEDS; row++) {
+    for (int col = 0; col < NUM_COLUMNS; col++) {
+      displayMatrix[row][col] = inputMatrix[row][col];
+    }
+  }
+}
+
 void outputBinaryValue(uint8_t ledNumber) {
   if (ledNumber > 7) ledNumber = 0;
   
-  // Extract bit 0, bit 1, and bit 2
-  bool bit0 = ledNumber & 0x01;  // Least significant bit
-  bool bit1 = (ledNumber & 0x02) >> 1;  // Middle bit
-  bool bit2 = (ledNumber & 0x04) >> 2;  // Most significant bit
+  bool bit0 = ledNumber & 0x01;        // Least significant bit
+  bool bit1 = (ledNumber & 0x02) >> 1; // Middle bit
+  bool bit2 = (ledNumber & 0x04) >> 2; // Most significant bit
   
   // Output to pins
   digitalWrite(OUTPUT_BIT0, bit0);
@@ -61,28 +61,29 @@ void outputBinaryValue(uint8_t ledNumber) {
   digitalWrite(OUTPUT_BIT2, bit2);
 }
 
-// Load a pattern matrix into the display matrix
-// inputMatrix: array of NUM_COLUMNS values (0-7), each representing which LED to turn on at that angle
-void loadMatrix(const uint8_t inputMatrix[NUM_COLUMNS]) {
-  for (int i = 0; i < NUM_COLUMNS; i++) {
-    displayMatrix[i] = inputMatrix[i];
-  }
-}
-
-// Display one column value for specified duration
-// columnIndex: which column (0 to NUM_COLUMNS-1)
-// durationUs: how long to display this column in microseconds
 void displayColumn(int columnIndex, unsigned long durationUs) {
   if (columnIndex < 0 || columnIndex >= NUM_COLUMNS) return;
   
-  // Get which LED should be on for this column
-  uint8_t ledValue = displayMatrix[columnIndex];
+  unsigned long startMicros = micros();
+  unsigned long endMicros = startMicros + durationUs;
   
-  // Output the binary value
-  outputBinaryValue(ledValue);
+  int iterationsPerLED = max(1, (int)(durationUs / (NUM_LEDS * 10))); 
   
-  // Hold for the specified duration
-  delayMicroseconds(durationUs);
+  while (micros() < endMicros) {
+    for (int led = 0; led < NUM_LEDS; led++) {
+      if (displayMatrix[led][columnIndex]) {
+        outputBinaryValue(led);
+        delayMicroseconds(10); 
+      }
+      
+      if (micros() >= endMicros) break;
+    }
+  }
+  
+  outputBinaryValue(0);
+  digitalWrite(OUTPUT_BIT0, LOW);
+  digitalWrite(OUTPUT_BIT1, LOW);
+  digitalWrite(OUTPUT_BIT2, LOW);
 }
 
 float getCurrentAngle() {
@@ -98,11 +99,10 @@ float getCurrentAngle() {
 }
 
 void setup() {
-  // Serial.begin(115200);
   Serial.begin(9600);
   delay(1000);
   
-  // Setup binary output pins (3 pins for 8 LEDs)
+  // Setup binary output pins
   pinMode(OUTPUT_BIT0, OUTPUT);
   pinMode(OUTPUT_BIT1, OUTPUT);
   pinMode(OUTPUT_BIT2, OUTPUT);
@@ -115,114 +115,83 @@ void setup() {
   pinMode(ENC_B, INPUT_PULLUP);
   setupEncoder();
   
-  // Create example test pattern
-  uint8_t testPattern[NUM_COLUMNS];
-  
-  // Pattern 1: 8 segments (45 degrees each)
-  for (int col = 0; col < NUM_COLUMNS; col++) {
-    if (col < 45) {
-      testPattern[col] = 0;  // LED 0 (binary 000)
-    } else if (col < 90) {
-      testPattern[col] = 1;  // LED 1 (binary 001)
-    } else if (col < 135) {
-      testPattern[col] = 2;  // LED 2 (binary 010)
-    } else if (col < 180) {
-      testPattern[col] = 3;  // LED 3 (binary 011)
-    } else if (col < 225) {
-      testPattern[col] = 4;  // LED 4 (binary 100)
-    } else if (col < 270) {
-      testPattern[col] = 5;  // LED 5 (binary 101)
-    } else if (col < 315) {
-      testPattern[col] = 6;  // LED 6 (binary 110)
-    } else {
-      testPattern[col] = 7;  // LED 7 (binary 111)
+  // Initialize display matrix to all off
+  for (int row = 0; row < NUM_LEDS; row++) {
+    for (int col = 0; col < NUM_COLUMNS; col++) {
+      displayMatrix[row][col] = false;
     }
   }
   
-  // Load the test pattern into display matrix
-  loadMatrix(testPattern);
+  // Example: Create a test pattern matrix and load it
+  bool myPattern[NUM_LEDS][NUM_COLUMNS];
   
+
+  // Initialize to all off
+  for (int row = 0; row < NUM_LEDS; row++) {
+    for (int col = 0; col < NUM_COLUMNS; col++) {
+      myPattern[row][col] = false;
+    }
+  }
+
+  // Set your pattern - example: LED 0 and LED 3 on from 0-180°
+  for (int col = 0; col < 360; col++) {
+    myPattern[0][col] = true;  // LED 0 ON
+    myPattern[1][col] = true;  // LED 0 ON
+    myPattern[2][col] = true;  // LED 0 ON
+    myPattern[3][col] = true;  // LED 0 ON
+  }
+
+  // Load it into the display
+  setDisplayMatrix(myPattern);
+    
   lastTime = millis();
   Serial.println("POV Display Ready - Motor should be spinning at ~5 Hz");
-  Serial.println("Using 3-bit output (8 LEDs): BIT0=" + String(OUTPUT_BIT0) + 
-                 ", BIT1=" + String(OUTPUT_BIT1) + ", BIT2=" + String(OUTPUT_BIT2));
+  Serial.println("Using 8 LEDs with 3 output bits");
+  Serial.println("Output pins: BIT0=" + String(OUTPUT_BIT0) + ", BIT1=" + String(OUTPUT_BIT1) + ", BIT2=" + String(OUTPUT_BIT2));
 }
 
 void loop() {
-  // // Get current angle
-  // float angle = getCurrentAngle();
-  
-  // // Convert angle to column index (0 to NUM_COLUMNS-1)
-  // int columnIndex = (int)angle;
-  // if (columnIndex >= NUM_COLUMNS) columnIndex = NUM_COLUMNS - 1;
-  
-  // // Display the current column
-  // displayColumn(columnIndex, COLUMN_DURATION_US);
-
-  // if (Serial.available()) {
-  //   String data = Serial.readStringUntil('\n');
-  //   Serial.println("Received:");
-  //   Serial.println(data);
-
-  //   // parse matrix here
-  // }
-  
-  // Debug output (comment out for better performance)
-  // static unsigned long lastPrint = 0;
-  // if (millis() - lastPrint > 500) {
-  //   Serial.print("Angle: ");
-  //   Serial.print(angle, 1);
-  //   Serial.print("° | Column: ");
-  //   Serial.print(columnIndex);
-  //   Serial.print(" | LED value: ");
-  //   Serial.println(displayMatrix[columnIndex]);
-  //   lastPrint = millis();
-  // }
-
-  // Check for incoming serial data to update matrix
   if (Serial.available()) {
-    String data = Serial.readStringUntil('\n');
-    data.trim();  // Remove whitespace
-    
-    Serial.println("Received: " + data);
-    
-    // Parse matrix data
-    // Expected format: comma-separated values, 360 numbers (0-7)
-    // Example: "0,1,2,3,4,5,6,7,0,1,2,..."
-    
-    uint8_t newPattern[NUM_COLUMNS];
-    int colIndex = 0;
-    int startPos = 0;
-    
-    // Parse comma-separated values
-    for (int i = 0; i <= data.length(); i++) {
-      if (i == data.length() || data[i] == ',') {
-        if (colIndex >= NUM_COLUMNS) break;
-        
-        String valueStr = data.substring(startPos, i);
-        valueStr.trim();
-        int value = valueStr.toInt();
-        
-        // Validate value is 0-7
-        if (value < 0) value = 0;
-        if (value > 7) value = 7;
-        
-        newPattern[colIndex] = (uint8_t)value;
-        colIndex++;
-        startPos = i + 1;
+    Serial.println("Receiving matrix data...");
+
+    int MATRIX_COLS = 100;
+
+    bool newPattern[8][MATRIX_COLS];
+
+    // Initialize pattern to all false
+    for (int r = 0; r < 8; r++) {
+      for (int c = 0; c < MATRIX_COLS; c++) {
+        newPattern[r][c] = false;
       }
     }
-    
-    // If we received valid data, load it
-    if (colIndex == NUM_COLUMNS) {
-      loadMatrix(newPattern);
-      Serial.println("Matrix updated successfully!");
-    } else {
-      Serial.print("Error: Expected 360 values, got ");
-      Serial.println(colIndex);
+
+    int rowsReceived = 0;
+
+    while (rowsReceived < 8) {
+      unsigned long startWait = millis();
+      while (!Serial.available() && (millis() - startWait) < 1000) {
+        delay(10)
+      }
+
+      if (!Serial.available()) {
+        Serial.println("Timeout waiting for data");
+        break;
+      }
+
+      String rowData = Serial.readStringUntil('\n');
+      rowData.trim();
+
+      if (rowData.length() == 0) continue;
+
+      int colIndex = 0;
+      int startPos = 0;
+
+      for (int i = 0; i <= rowData.length(); i++) {
+        if (i == rowData.length() || rowData[i] == ',')
+      }
     }
   }
-  
+
   // Get current angle
   float angle = getCurrentAngle();
   
@@ -233,15 +202,14 @@ void loop() {
   // Display the current column
   displayColumn(columnIndex, COLUMN_DURATION_US);
   
-  // Debug output (comment out for better performance)
+  // Debug output (uncomment to see status)
   // static unsigned long lastPrint = 0;
   // if (millis() - lastPrint > 500) {
   //   Serial.print("Angle: ");
   //   Serial.print(angle, 1);
   //   Serial.print("° | Column: ");
-  //   Serial.print(columnIndex);
-  //   Serial.print(" | LED value: ");
-  //   Serial.println(displayMatrix[columnIndex]);
+  //   Serial.println(columnIndex);
   //   lastPrint = millis();
   // }
 }
+
