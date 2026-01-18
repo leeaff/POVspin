@@ -8,21 +8,28 @@
 #define OUTPUT_BIT0 8
 #define OUTPUT_BIT1 7
 #define OUTPUT_BIT2 5
+#define OUTPUT_BIT3 10
 
 #define ENC_A 32
 #define ENC_B 33
 #define CPR 2400
 #define PCNT_UNIT_USED PCNT_UNIT_0
 
-#define NUM_LEDS 8
-#define NUM_COLUMNS 100
+#define NUM_LEDS 15
+#define NUM_COLUMNS 50
 #define COLUMN_DURATION_US 500
 
 // -----------------------
 // Matrices
 // -----------------------
-bool displayMatrix[NUM_LEDS][NUM_COLUMNS];   // active display
-bool incomingMatrix[NUM_LEDS][NUM_COLUMNS];  // being received via serial
+bool displayMatrix[NUM_LEDS][NUM_COLUMNS];
+bool incomingMatrix[NUM_LEDS][NUM_COLUMNS];
+
+// -----------------------
+// Angle tracking variables
+// -----------------------
+int16_t lastRawCount = 0;
+int32_t totalCount = 0;  // Tracks continuous rotation without wrapping
 
 // -----------------------
 // Encoder setup
@@ -51,10 +58,11 @@ void setupEncoder() {
 // POV display helpers
 // -----------------------
 void outputBinaryValue(uint8_t ledNumber) {
-  if (ledNumber > 7) ledNumber = 0;
+  if (ledNumber > NUM_LEDS) ledNumber = 0;
   digitalWrite(OUTPUT_BIT0, ledNumber & 0x01);
   digitalWrite(OUTPUT_BIT1, (ledNumber & 0x02) >> 1);
   digitalWrite(OUTPUT_BIT2, (ledNumber & 0x04) >> 2);
+  digitalWrite(OUTPUT_BIT3, (ledNumber & 0x08) >> 3);
 }
 
 void displayColumn(int columnIndex, unsigned long durationUs) {
@@ -65,19 +73,40 @@ void displayColumn(int columnIndex, unsigned long durationUs) {
   
   while (micros() < endMicros) {
     for (int led = 0; led < NUM_LEDS; led++) {
-      if (displayMatrix[led][columnIndex]) outputBinaryValue(led);
+      if (displayMatrix[led][columnIndex]) {
+        outputBinaryValue(led);
+        delayMicroseconds(5);
+      }
       if (micros() >= endMicros) break;
     }
   }
-  outputBinaryValue(0);  // turn off LEDs
+  outputBinaryValue(0);
 }
 
 float getCurrentAngle() {
-  int16_t count = 0;
-  pcnt_get_counter_value(PCNT_UNIT_USED, &count);
-  count = (int16_t)(count * 5.911);  // calibration factor
-  float angle = fmod((float)count, (float)CPR) * (360.0 / CPR);
+  int16_t rawCount = 0;
+  pcnt_get_counter_value(PCNT_UNIT_USED, &rawCount);
+  
+  // Track accumulated count to handle wrapping
+  int16_t delta = rawCount - lastRawCount;
+  
+  // Handle counter wrapping (shouldn't happen often with 16-bit, but just in case)
+  if (delta > 16384) {
+    delta -= 32768;
+  } else if (delta < -16384) {
+    delta += 32768;
+  }
+  
+  totalCount += delta;
+  lastRawCount = rawCount;
+  
+  // Apply calibration
+  int32_t calibratedCount = (int32_t)(totalCount * 5.911);
+  
+  // Calculate angle within 0-360 range
+  float angle = fmod((float)calibratedCount, (float)CPR) * (360.0 / CPR);
   if (angle < 0) angle += 360.0;
+  
   return angle;
 }
 
@@ -106,32 +135,36 @@ void processRow(String rowData, int rowIndex) {
 // -----------------------
 void setup() {
   Serial.begin(9600);
-  delay(2000);              // wait for Web Serial to connect
-  Serial.println("READY");  // handshake
-
+  delay(2000);
+  Serial.println("READY");
+  
   // Output pins
   pinMode(OUTPUT_BIT0, OUTPUT);
   pinMode(OUTPUT_BIT1, OUTPUT);
   pinMode(OUTPUT_BIT2, OUTPUT);
+  pinMode(OUTPUT_BIT3, OUTPUT);
   outputBinaryValue(0);
-
+  
   // Encoder
   pinMode(ENC_A, INPUT_PULLUP);
   pinMode(ENC_B, INPUT_PULLUP);
   setupEncoder();
-
+  
+  // Initialize lastRawCount
+  pcnt_get_counter_value(PCNT_UNIT_USED, &lastRawCount);
+  totalCount = 0;
+  
   // Initialize matrices
   for (int r = 0; r < NUM_LEDS; r++)
     for (int c = 0; c < NUM_COLUMNS; c++)
       displayMatrix[r][c] = incomingMatrix[r][c] = false;
-
-  // Optional: test pattern
+  
+  // Test pattern
   for (int c = 0; c < NUM_COLUMNS; c++) {
-    displayMatrix[0][c] = true;
-    displayMatrix[2][c] = true;
+    displayMatrix[14][c] = true;
   }
-
-  Serial.println("POV Display Ready");
+  
+  Serial.println("POV Display Ready - Stable Angle Tracking Enabled");
 }
 
 // -----------------------
@@ -153,18 +186,20 @@ void loop() {
       rowBuffer += c;
     }
   }
-
+  
   // Apply new matrix if fully received
   if (newMatrixReady) {
     for (int r = 0; r < NUM_LEDS; r++)
       for (int c = 0; c < NUM_COLUMNS; c++)
         displayMatrix[r][c] = incomingMatrix[r][c];
     newMatrixReady = false;
+    Serial.println("Matrix updated");
   }
-
+  
   // Display current column
   float angle = getCurrentAngle();
-  int columnIndex = (int)angle;
+  int columnIndex = (int)(angle / 360.0 * NUM_COLUMNS);
   if (columnIndex >= NUM_COLUMNS) columnIndex = NUM_COLUMNS - 1;
+  
   displayColumn(columnIndex, COLUMN_DURATION_US);
 }
