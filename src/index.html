@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Matrix Editor for Arduino</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      /* background: linear-gradient(135deg, #1e293b 0%, #7e22ce 50%, #1e293b 100%); */
+      background: #213159;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 2rem;
+      user-select: none;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      color: white;
+      margin-bottom: 0.5rem;
+      font-weight: bold;
+    }
+
+    .subtitle {
+      color: #e9d5ff;
+      font-size: 1.1rem;
+    }
+
+    .matrix-container {
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      margin-bottom: 1.5rem;
+      overflow-x: auto;
+    }
+
+    .matrix {
+      display: inline-block;
+      cursor: crosshair;
+    }
+
+    .matrix-row {
+      display: flex;
+      line-height: 0;
+    }
+
+    .cell {
+      width: 12px;
+      height: 12px;
+      background-color: white;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      transition: background-color 75ms;
+      cursor: pointer;
+    }
+
+    .cell.active {
+      background-color: #ef4444;
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 1rem 2rem;
+      border-radius: 0.75rem;
+      border: none;
+      cursor: pointer;
+      transition: all 200ms;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
+
+    button:hover {
+      transform: scale(1.05);
+    }
+
+    .send-btn {
+      background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+      color: white;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .send-btn:hover {
+      background: linear-gradient(135deg, #9333ea 0%, #db2777 100%);
+    }
+
+    .clear-btn {
+      background: rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(10px);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .clear-btn:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    .instructions {
+      margin-top: 2rem;
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 0.75rem;
+      padding: 1.5rem;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .instructions h3 {
+      color: white;
+      margin-bottom: 1rem;
+      font-size: 1.2rem;
+    }
+
+    .instructions ul {
+      list-style: none;
+      color: #e9d5ff;
+    }
+
+    .instructions li {
+      margin-bottom: 0.5rem;
+      font-size: 0.95rem;
+    }
+
+    .icon {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Matrix Editor</h1>
+      <p class="subtitle">Click and drag to draw your pattern</p>
+    </div>
+
+    <div class="matrix-container">
+      <div id="matrix" class="matrix"></div>
+    </div>
+
+    <div class="controls">
+      <button class="send-btn" onclick="sendToArduino()">
+        <svg class="icon" viewBox="0 0 24 24">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        Send to Arduino
+      </button>
+      <button class="clear-btn" onclick="clearMatrix()">Clear All</button>
+    </div>
+
+    <div class="instructions">
+      <h3>Instructions:</h3>
+      <ul>
+        <li>• Click and drag across cells to draw your pattern</li>
+        <li>• Red cells = 1, White cells = 0</li>
+        <li>• Click "Send to Arduino" to transmit via Serial (or copy to clipboard)</li>
+        <li>• Matrix size: 8 rows × 100 columns</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    const ROWS = 8;
+    const COLS = 100;
+    let matrix = Array(ROWS).fill(null).map(() => Array(COLS).fill(0));
+    let isDrawing = false;
+    let drawMode = 1;
+
+    // Create matrix grid
+    const matrixEl = document.getElementById('matrix');
+    const cells = [];
+
+    for (let r = 0; r < ROWS; r++) {
+      const row = document.createElement('div');
+      row.className = 'matrix-row';
+      cells[r] = [];
+      
+      for (let c = 0; c < COLS; c++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.dataset.row = r;
+        cell.dataset.col = c;
+        
+        cell.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          handleMouseDown(r, c);
+        });
+        
+        cell.addEventListener('mouseenter', () => {
+          handleMouseEnter(r, c);
+        });
+        
+        row.appendChild(cell);
+        cells[r][c] = cell;
+      }
+      
+      matrixEl.appendChild(row);
+    }
+
+    document.addEventListener('mouseup', () => {
+      isDrawing = false;
+    });
+
+    function handleMouseDown(row, col) {
+      isDrawing = true;
+      drawMode = matrix[row][col] === 0 ? 1 : 0;
+      toggleCell(row, col, drawMode);
+    }
+
+    function handleMouseEnter(row, col) {
+      if (isDrawing) {
+        toggleCell(row, col, drawMode);
+      }
+    }
+
+    function toggleCell(row, col, value) {
+      matrix[row][col] = value;
+      if (value === 1) {
+        cells[row][col].classList.add('active');
+      } else {
+        cells[row][col].classList.remove('active');
+      }
+    }
+
+    async function sendToArduino() {
+      const matrixString = matrix.map(row => row.join(',')).join('\n');
+      
+      try {
+        if ('serial' in navigator) {
+          const port = await navigator.serial.requestPort();
+          await port.open({ baudRate: 9600 });
+          
+          const encoder = new TextEncoder();
+          const writer = port.writable.getWriter();
+          
+          await writer.write(encoder.encode(matrixString + '\n'));
+          
+          await writer.releaseLock();
+          await port.close();
+          
+          alert('Matrix sent to Arduino successfully!');
+          console.log(matrix);
+        } else {
+          throw new Error('Web Serial API not supported');
+        }
+      } catch (error) {
+        navigator.clipboard.writeText(matrixString);
+        alert('Serial connection not available. Matrix data copied to clipboard!\n\nYou can paste this into the Arduino Serial Monitor.');
+      }
+    }
+
+    function clearMatrix() {
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          matrix[r][c] = 0;
+          cells[r][c].classList.remove('active');
+        }
+      }
+    }
+  </script>
+</body>
+</html>
