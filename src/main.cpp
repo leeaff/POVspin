@@ -2,19 +2,24 @@
 #include "driver/pcnt.h"
 #include <math.h>
 
-#define OUTPUT_BIT0 8  
-#define OUTPUT_BIT1 7   
-#define OUTPUT_BIT2 5 
+// Binary output pins (these go to your external LED decoder circuit)
+#define OUTPUT_BIT0 8   // Change to your actual output pins
+#define OUTPUT_BIT1 7   // Change to your actual output pins
+#define OUTPUT_BIT2 5   // Third bit for 8 LEDs
 
+// Encoder Pins
 #define ENC_A 32
 #define ENC_B 33
 #define CPR 2400
 #define PCNT_UNIT_USED PCNT_UNIT_0
 
-#define NUM_LEDS 8  
-#define NUM_COLUMNS 360 
-#define COLUMN_DURATION_US 500  
+// POV Display Configuration
+#define NUM_LEDS 8  // Your external circuit controls 8 LEDs (3 bits = 2^3 = 8)
+#define NUM_COLUMNS 100  // Number of angular positions (1 degree resolution)
+#define COLUMN_DURATION_US 500  // Time to display each column in microseconds
 
+// Display matrix: 8 rows (LEDs) × NUM_COLUMNS
+// matrix[row][column] where row = LED number (0-7), column = angle position (0-359)
 bool displayMatrix[NUM_LEDS][NUM_COLUMNS];
 
 int16_t lastCount = 0;
@@ -40,6 +45,8 @@ void setupEncoder() {
   pcnt_counter_resume(PCNT_UNIT_USED);
 }
 
+// Set the display matrix from input
+// inputMatrix: 8 rows × NUM_COLUMNS array
 void setDisplayMatrix(bool inputMatrix[NUM_LEDS][NUM_COLUMNS]) {
   for (int row = 0; row < NUM_LEDS; row++) {
     for (int col = 0; col < NUM_COLUMNS; col++) {
@@ -48,9 +55,12 @@ void setDisplayMatrix(bool inputMatrix[NUM_LEDS][NUM_COLUMNS]) {
   }
 }
 
+// Output 3-bit value to control which LED is on
+// ledNumber: 0-7 (which of the 8 LEDs to turn on)
 void outputBinaryValue(uint8_t ledNumber) {
   if (ledNumber > 7) ledNumber = 0;
   
+  // Extract bit 0, bit 1, and bit 2
   bool bit0 = ledNumber & 0x01;        // Least significant bit
   bool bit1 = (ledNumber & 0x02) >> 1; // Middle bit
   bool bit2 = (ledNumber & 0x04) >> 2; // Most significant bit
@@ -61,25 +71,34 @@ void outputBinaryValue(uint8_t ledNumber) {
   digitalWrite(OUTPUT_BIT2, bit2);
 }
 
+// Display one column using multiplexing
+// columnIndex: which column (0 to NUM_COLUMNS-1)
+// durationUs: how long to display this column in microseconds
 void displayColumn(int columnIndex, unsigned long durationUs) {
   if (columnIndex < 0 || columnIndex >= NUM_COLUMNS) return;
   
   unsigned long startMicros = micros();
   unsigned long endMicros = startMicros + durationUs;
   
-  int iterationsPerLED = max(1, (int)(durationUs / (NUM_LEDS * 10))); 
+  // Calculate how many iterations we can do
+  // We want to cycle through all 8 LEDs multiple times for persistence of vision
+  int iterationsPerLED = max(1, (int)(durationUs / (NUM_LEDS * 10))); // ~10us per LED minimum
   
   while (micros() < endMicros) {
+    // Cycle through all 8 LEDs
     for (int led = 0; led < NUM_LEDS; led++) {
       if (displayMatrix[led][columnIndex]) {
+        // This LED should be ON at this column
         outputBinaryValue(led);
-        delayMicroseconds(10); 
+        delayMicroseconds(10); // Brief pulse
       }
       
+      // Check if time is up
       if (micros() >= endMicros) break;
     }
   }
   
+  // Turn off all LEDs after column display
   outputBinaryValue(0);
   digitalWrite(OUTPUT_BIT0, LOW);
   digitalWrite(OUTPUT_BIT1, LOW);
@@ -134,11 +153,11 @@ void setup() {
   }
 
   // Set your pattern - example: LED 0 and LED 3 on from 0-180°
-  for (int col = 0; col < 360; col++) {
+  for (int col = 0; col < 100; col++) {
     myPattern[0][col] = true;  // LED 0 ON
-    myPattern[1][col] = true;  // LED 0 ON
+    myPattern[1][col] = false;  // LED 0 ON
     myPattern[2][col] = true;  // LED 0 ON
-    myPattern[3][col] = true;  // LED 0 ON
+    myPattern[3][col] = false;  // LED 0 ON
   }
 
   // Load it into the display
@@ -154,23 +173,21 @@ void loop() {
   if (Serial.available()) {
     Serial.println("Receiving matrix data...");
 
-    int MATRIX_COLS = 100;
+    bool newPattern[NUM_LEDS][NUM_COLUMNS] = { false };
 
-    bool newPattern[8][MATRIX_COLS];
-
-    // Initialize pattern to all false
-    for (int r = 0; r < 8; r++) {
-      for (int c = 0; c < MATRIX_COLS; c++) {
-        newPattern[r][c] = false;
-      }
-    }
+    // // Initialize pattern to all false
+    // for (int r = 0; r < NUM_LEDS; r++) {
+    //   for (int c = 0; c < NUM_COLUMNS; c++) {
+    //     newPattern[r][c] = false;
+    //   }
+    // }
 
     int rowsReceived = 0;
 
-    while (rowsReceived < 8) {
+    while (rowsReceived < NUM_LEDS) {
       unsigned long startWait = millis();
       while (!Serial.available() && (millis() - startWait) < 1000) {
-        delay(10)
+        delay(10);
       }
 
       if (!Serial.available()) {
@@ -180,18 +197,32 @@ void loop() {
 
       String rowData = Serial.readStringUntil('\n');
       rowData.trim();
-
       if (rowData.length() == 0) continue;
 
-      int colIndex = 0;
-      int startPos = 0;
+      Serial.print("Row ");
+      Serial.print(rowsReceived);
+      Serial.print(": ");
+      Serial.println(rowData);
+
+      int col = 0;
+      int start = 0;
 
       for (int i = 0; i <= rowData.length(); i++) {
-        if (i == rowData.length() || rowData[i] == ',')
+        if (i == rowData.length() || rowData[i] == ',') {
+          int bit = rowData.substring(start, i).toInt();
+          if (col < NUM_COLUMNS) {
+            newPattern[rowsReceived][col] = (bit == 1);
+          }
+          col++;
+          start = i + 1;
+        }
       }
-    }
-  }
 
+      rowsReceived++;
+    }
+
+    setDisplayMatrix(newPattern);
+  }
   // Get current angle
   float angle = getCurrentAngle();
   
